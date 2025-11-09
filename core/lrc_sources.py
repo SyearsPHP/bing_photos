@@ -8,6 +8,7 @@ import re
 import time
 from typing import Optional, Dict, List
 from urllib.parse import quote
+import unicodedata
 
 class LRCSource:
     """Base class for LRC sources"""
@@ -22,6 +23,23 @@ class LRCSource:
         # Enable SSL verification but will fallback to disabled if needed
         self.session.verify = True
         self.timeout = 10
+    
+    @staticmethod
+    def _normalize_search_term(text: str) -> str:
+        """Normalize search term for API queries"""
+        if not text:
+            return ""
+        
+        try:
+            # Normalize unicode characters (e.g., convert composed characters to decomposed)
+            normalized = unicodedata.normalize('NFKD', text)
+            # Remove null characters
+            normalized = normalized.replace('\x00', '').strip()
+            # Remove multiple spaces
+            normalized = ' '.join(normalized.split())
+            return normalized
+        except Exception:
+            return text
     
     def _safe_request(self, method: str, url: str, **kwargs) -> Optional[requests.Response]:
         """Make a request with SSL fallback"""
@@ -48,10 +66,14 @@ class NetEaseSource(LRCSource):
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         try:
+            # Normalize search terms
+            artist_norm = self._normalize_search_term(artist)
+            title_norm = self._normalize_search_term(title)
+            
             # Search for song using the working API endpoint
             search_url = "https://music.163.com/api/v1/search/get"
             params = {
-                's': f"{artist} {title}",
+                's': f"{artist_norm} {title_norm}",
                 'type': 1,
                 'limit': 10
             }
@@ -88,6 +110,10 @@ class KuGouSource(LRCSource):
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         try:
+            # Normalize search terms
+            artist_norm = self._normalize_search_term(artist)
+            title_norm = self._normalize_search_term(title)
+            
             # Try alternative KuGou endpoint
             search_url = "https://www.kugou.com/yy/index.php"
             
@@ -96,7 +122,7 @@ class KuGouSource(LRCSource):
                 'hash': '',
                 'album_id': '',
                 'mid': '',
-                'keyword': f"{artist} {title}"
+                'keyword': f"{artist_norm} {title_norm}"
             }
             
             response = self._safe_request('GET', search_url, params=params)
@@ -135,6 +161,10 @@ class TencentQQSource(LRCSource):
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         try:
+            # Normalize search terms
+            artist_norm = self._normalize_search_term(artist)
+            title_norm = self._normalize_search_term(title)
+            
             # Using the JSON format endpoint
             search_url = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
             
@@ -144,7 +174,7 @@ class TencentQQSource(LRCSource):
                 'flag_qc': 0,
                 'p': 1,
                 'n': 10,
-                'w': f"{artist} {title}",
+                'w': f"{artist_norm} {title_norm}",
                 'g_tk': 5381,
                 'format': 'json'  # Request JSON format directly
             }

@@ -10,6 +10,28 @@ from mutagen.wave import WAVE
 
 SUPPORTED_FORMATS = {'.mp3', '.wav', '.flac'}
 
+def _clean_metadata_string(text):
+    """Clean and normalize metadata string"""
+    if not text:
+        return None
+    
+    try:
+        # Convert to string if needed
+        if isinstance(text, bytes):
+            text = text.decode('utf-8', errors='replace')
+        else:
+            text = str(text)
+        
+        # Remove null characters and other problematic characters
+        text = text.replace('\x00', '').strip()
+        
+        # Remove multiple consecutive spaces
+        text = ' '.join(text.split())
+        
+        return text if text else None
+    except Exception:
+        return None
+
 class MusicProcessor:
     @staticmethod
     def get_music_files(folder_path, recursive=True):
@@ -48,22 +70,22 @@ class MusicProcessor:
                 if audio.tags:
                     # Try TPE1 (lead performer) first
                     if 'TPE1' in audio.tags:
-                        artist = str(audio.tags['TPE1'])
+                        artist = _clean_metadata_string(audio.tags['TPE1'])
                     # Fallback to ARTIST
                     elif 'ARTIST' in audio.tags:
-                        artist = str(audio.tags['ARTIST'])
+                        artist = _clean_metadata_string(audio.tags['ARTIST'])
                     
                     # Try TIT2 (title) first
                     if 'TIT2' in audio.tags:
-                        title = str(audio.tags['TIT2'])
+                        title = _clean_metadata_string(audio.tags['TIT2'])
                     # Fallback to TITLE
                     elif 'TITLE' in audio.tags:
-                        title = str(audio.tags['TITLE'])
+                        title = _clean_metadata_string(audio.tags['TITLE'])
                 
                 if artist and title:
                     return {
-                        'artist': artist.strip(),
-                        'title': title.strip(),
+                        'artist': artist,
+                        'title': title,
                         'format': 'mp3'
                     }
             
@@ -73,15 +95,17 @@ class MusicProcessor:
                 title = None
                 
                 if 'artist' in audio:
-                    artist = audio['artist'][0] if isinstance(audio['artist'], list) else audio['artist']
+                    raw_artist = audio['artist'][0] if isinstance(audio['artist'], list) else audio['artist']
+                    artist = _clean_metadata_string(raw_artist)
                 
                 if 'title' in audio:
-                    title = audio['title'][0] if isinstance(audio['title'], list) else audio['title']
+                    raw_title = audio['title'][0] if isinstance(audio['title'], list) else audio['title']
+                    title = _clean_metadata_string(raw_title)
                 
                 if artist and title:
                     return {
-                        'artist': artist.strip(),
-                        'title': title.strip(),
+                        'artist': artist,
+                        'title': title,
                         'format': 'flac'
                     }
             
@@ -92,15 +116,17 @@ class MusicProcessor:
                 
                 if audio.tags:
                     if 'artist' in audio.tags:
-                        artist = audio.tags['artist'][0] if isinstance(audio.tags['artist'], list) else audio.tags['artist']
+                        raw_artist = audio.tags['artist'][0] if isinstance(audio.tags['artist'], list) else audio.tags['artist']
+                        artist = _clean_metadata_string(raw_artist)
                     
                     if 'title' in audio.tags:
-                        title = audio.tags['title'][0] if isinstance(audio.tags['title'], list) else audio.tags['title']
+                        raw_title = audio.tags['title'][0] if isinstance(audio.tags['title'], list) else audio.tags['title']
+                        title = _clean_metadata_string(raw_title)
                 
                 if artist and title:
                     return {
-                        'artist': artist.strip(),
-                        'title': title.strip(),
+                        'artist': artist,
+                        'title': title,
                         'format': 'wav'
                     }
             

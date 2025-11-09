@@ -26,6 +26,9 @@ class LyricsDownloader:
         artist = metadata['artist']
         title = metadata['title']
         
+        if not artist or not title:
+            return False
+        
         # Try multiple sources
         for source in self.sources:
             try:
@@ -35,7 +38,7 @@ class LyricsDownloader:
                         f.write(lrc_content)
                     return True
             except Exception as e:
-                print(f"Error downloading from {source.__class__.__name__}: {e}")
+                print(f"Error downloading from {source.__class__.__name__} for '{artist} - {title}': {e}")
                 time.sleep(0.5)  # Rate limiting
         
         return False
