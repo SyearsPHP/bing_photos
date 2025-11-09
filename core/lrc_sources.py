@@ -15,10 +15,28 @@ class LRCSource:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
         })
-        self.session.verify = False
+        # Enable SSL verification but will fallback to disabled if needed
+        self.session.verify = True
         self.timeout = 10
+    
+    def _safe_request(self, method: str, url: str, **kwargs) -> Optional[requests.Response]:
+        """Make a request with SSL fallback"""
+        try:
+            return self.session.request(method, url, timeout=self.timeout, **kwargs)
+        except requests.exceptions.SSLError:
+            # Fallback to disabled SSL verification if SSL fails
+            old_verify = self.session.verify
+            self.session.verify = False
+            try:
+                return self.session.request(method, url, timeout=self.timeout, **kwargs)
+            finally:
+                self.session.verify = old_verify
+        except Exception:
+            return None
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         """Download lyrics for artist and title"""
@@ -30,16 +48,16 @@ class NetEaseSource(LRCSource):
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         try:
-            # Search for song
-            search_url = "https://music.163.com/api/search/get/web"
+            # Search for song using the working API endpoint
+            search_url = "https://music.163.com/api/v1/search/get"
             params = {
                 's': f"{artist} {title}",
                 'type': 1,
                 'limit': 10
             }
             
-            response = self.session.get(search_url, params=params, timeout=self.timeout)
-            if response.status_code != 200:
+            response = self._safe_request('GET', search_url, params=params)
+            if not response or response.status_code != 200:
                 return None
             
             data = response.json()
@@ -52,9 +70,9 @@ class NetEaseSource(LRCSource):
             
             # Get lyrics
             lyric_url = f"https://music.163.com/api/song/lyric?id={song_id}&lv=1"
-            lyric_response = self.session.get(lyric_url, timeout=self.timeout)
+            lyric_response = self._safe_request('GET', lyric_url)
             
-            if lyric_response.status_code == 200:
+            if lyric_response and lyric_response.status_code == 200:
                 lyric_data = lyric_response.json()
                 if lyric_data.get('lrc', {}).get('lyric'):
                     return lyric_data['lrc']['lyric']
@@ -70,54 +88,41 @@ class KuGouSource(LRCSource):
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         try:
-            search_url = "https://mobilecdn.kugou.com/new/app/i/getLyricNew"
+            # Try alternative KuGou endpoint
+            search_url = "https://www.kugou.com/yy/index.php"
             
             params = {
-                'app_id': '1014',
-                'clientver': '20000',
-                'mid': '0',
-                'platid': '4',
-                'dfid': '',
-                'keyword': f"{artist} {title}",
-                'ver': 1,
-                'hash': ''
+                'r': 'play/getdata',
+                'hash': '',
+                'album_id': '',
+                'mid': '',
+                'keyword': f"{artist} {title}"
             }
             
-            response = self.session.get(search_url, params=params, timeout=self.timeout, verify=False)
-            if response.status_code != 200:
+            response = self._safe_request('GET', search_url, params=params)
+            if not response or response.status_code != 200:
                 return None
             
             data = response.json()
-            if data.get('status') != 200 or not data.get('data'):
+            if not data.get('data') or not data['data'].get('play_url'):
                 return None
             
-            candidates = data['data']
-            if not candidates:
-                return None
-            
-            # Get first match
-            candidate = candidates[0]
-            lrc_id = candidate.get('id')
-            lrc_acc = candidate.get('accesskey')
-            
-            if not lrc_id or not lrc_acc:
-                return None
-            
-            # Download lyrics
-            lyric_url = f"https://lyrics.kugou.com/download"
+            # Try lyrics download endpoint
+            lyric_url = "https://www.kugou.com/yy/index.php"
             lyric_params = {
-                'id': lrc_id,
-                'accesskey': lrc_acc,
-                'fmt': 'lrc',
-                'charset': 'utf8'
+                'r': 'lyric/get',
+                'hash': data['data'].get('hash', ''),
+                'album_id': data['data'].get('album_id', '')
             }
             
-            lyric_response = self.session.get(lyric_url, params=lyric_params, timeout=self.timeout, verify=False)
-            if lyric_response.status_code == 200:
-                content = lyric_response.text
-                # Check if it's valid LRC format
-                if content.strip().startswith('['):
-                    return content
+            lyric_response = self._safe_request('GET', lyric_url, params=lyric_params)
+            if lyric_response and lyric_response.status_code == 200:
+                lyric_data = lyric_response.json()
+                if lyric_data.get('data') and lyric_data['data'].get('content'):
+                    content = lyric_data['data']['content']
+                    # Check if it's valid LRC format
+                    if content.strip().startswith('['):
+                        return content
         
         except Exception as e:
             print(f"KuGou error: {e}")
@@ -130,7 +135,7 @@ class TencentQQSource(LRCSource):
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         try:
-            # Using a simpler endpoint
+            # Using the JSON format endpoint
             search_url = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
             
             params = {
@@ -140,21 +145,16 @@ class TencentQQSource(LRCSource):
                 'p': 1,
                 'n': 10,
                 'w': f"{artist} {title}",
-                'g_tk': 5381
+                'g_tk': 5381,
+                'format': 'json'  # Request JSON format directly
             }
             
-            response = self.session.get(search_url, params=params, timeout=self.timeout)
-            if response.status_code != 200:
+            response = self._safe_request('GET', search_url, params=params)
+            if not response or response.status_code != 200:
                 return None
             
-            # Parse response
-            text = response.text
-            # QQ music returns a callback format, use greedy regex to get full JSON
-            match = re.search(r'callback\((.*)\)\s*;?\s*$', text, re.DOTALL)
-            if not match:
-                return None
-            
-            data = json.loads(match.group(1))
+            # Parse JSON response directly
+            data = response.json()
             
             # Look for songs in the response
             if not data.get('data', {}).get('song', {}).get('list'):
@@ -182,26 +182,17 @@ class TencentQQSource(LRCSource):
                 'format': 'json'
             }
             
-            lyric_response = self.session.get(lyric_url, params=lyric_params, timeout=self.timeout)
-            if lyric_response.status_code == 200:
-                text = lyric_response.text
-                # Handle callback format - use greedy regex for full JSON
-                if 'MusicJsonCallback(' in text:
+            lyric_response = self._safe_request('GET', lyric_url, params=lyric_params)
+            if lyric_response and lyric_response.status_code == 200:
+                lyric_data = lyric_response.json()
+                if lyric_data.get('lyric'):
+                    # Decode base64 if needed
+                    import base64
                     try:
-                        match = re.search(r'MusicJsonCallback\((.*)\)\s*;?\s*$', text, re.DOTALL)
-                        if match:
-                            json_str = match.group(1)
-                            lyric_data = json.loads(json_str)
-                            if lyric_data.get('lyric'):
-                                # Decode base64 if needed
-                                import base64
-                                try:
-                                    decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
-                                    return decoded
-                                except:
-                                    return lyric_data.get('lyric')
-                    except (json.JSONDecodeError, ValueError):
-                        pass
+                        decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
+                        return decoded
+                    except:
+                        return lyric_data.get('lyric')
         
         except Exception as e:
             print(f"Tencent QQ error: {e}")
