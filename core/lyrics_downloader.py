@@ -20,25 +20,28 @@ class LyricsDownloader:
         """
         Download lyrics for a song based on metadata
         """
-        if not metadata or not metadata.get('artist') or not metadata.get('title'):
+        if not metadata:
             return False
         
-        artist = metadata['artist']
-        title = metadata['title']
+        artist = metadata.get('artist', '').strip()
+        title = metadata.get('title', '').strip()
         
         if not artist or not title:
             return False
         
         # Try multiple sources
-        for source in self.sources:
+        for idx, source in enumerate(self.sources):
             try:
                 lrc_content = source.get_lyrics(artist, title)
-                if lrc_content:
+                if lrc_content and lrc_content.strip():
                     with open(output_path, 'w', encoding='utf-8') as f:
                         f.write(lrc_content)
                     return True
             except Exception as e:
                 print(f"Error downloading from {source.__class__.__name__} for '{artist} - {title}': {e}")
-                time.sleep(0.5)  # Rate limiting
+            
+            # Add delay between source attempts to avoid rate limiting
+            if idx < len(self.sources) - 1:
+                time.sleep(1.0)
         
         return False
