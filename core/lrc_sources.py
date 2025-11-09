@@ -223,6 +223,9 @@ class NetEaseSource(LRCSource):
             artist_norm = self._normalize_search_term(artist)
             title_norm = self._normalize_search_term(title)
             
+            print(f"\n=== NetEase Music API (Candidates) ===")
+            print(f"Searching for: {artist_norm} {title_norm}")
+            
             # Search for song using the working API endpoint
             search_url = "https://music.163.com/api/v1/search/get"
             params = {
@@ -233,15 +236,19 @@ class NetEaseSource(LRCSource):
             
             response = self._safe_request('GET', search_url, params=params)
             if not response or response.status_code != 200:
+                print(f"✗ NetEase search failed (status: {response.status_code if response else 'None'})")
                 return candidates
             
             data = response.json()
             if not data.get('result', {}).get('songs'):
+                print(f"✗ No songs found in NetEase results")
                 return candidates
             
             # Score all songs and sort by match quality
             songs = data['result']['songs']
             scored_songs = []
+            
+            print(f"Found {len(songs)} songs in search results")
             
             for song in songs:
                 song_name = song.get('name', '').lower()
@@ -286,9 +293,12 @@ class NetEaseSource(LRCSource):
             
             scored_songs.sort(key=lambda x: x[0], reverse=True)
             
+            print(f"Top scores: {[score for score, _ in scored_songs[:5]]}")
+            
             # Try top 15 best matches with valid scores
             for score, attempt_song in scored_songs[:15]:
                 if score < 5:
+                    print(f"Skipping song with score < 5: {score}")
                     continue
                 
                 try:
@@ -297,6 +307,8 @@ class NetEaseSource(LRCSource):
                     artist_names = ', '.join([a.get('name', '') for a in song_artists])
                     song_id = attempt_song.get('id')
                     
+                    print(f"Trying: {artist_names} - {song_name} (score: {score})")
+                    
                     lyric_url = f"https://music.163.com/api/song/lyric?id={song_id}&lv=1"
                     lyric_response = self._safe_request('GET', lyric_url)
                     
@@ -304,6 +316,7 @@ class NetEaseSource(LRCSource):
                         lyric_data = lyric_response.json()
                         lyric_content = lyric_data.get('lrc', {}).get('lyric', '')
                         if lyric_content and lyric_content.strip():
+                            print(f"  ✓ Found lyrics")
                             # Extract preview (first 3 lines with timestamps)
                             lines = lyric_content.split('\n')
                             preview_lines = [line for line in lines[:5] if line.strip().startswith('[')]
@@ -317,11 +330,16 @@ class NetEaseSource(LRCSource):
                                 'full_lyrics': lyric_content,
                                 'score': score
                             })
-                except Exception:
+                        else:
+                            print(f"  ✗ No lyrics available")
+                    else:
+                        print(f"  ✗ Lyrics request failed (status: {lyric_response.status_code if lyric_response else 'None'})")
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
                     continue
         
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"NetEase error: {e}")
         
         return candidates
 
@@ -455,6 +473,9 @@ class KuGouSource(LRCSource):
             artist_norm = self._normalize_search_term(artist)
             title_norm = self._normalize_search_term(title)
             
+            print(f"\n=== KuGou Music API (Candidates) ===")
+            print(f"Searching for: {artist_norm} {title_norm}")
+            
             # Search for songs
             search_url = "https://songsearch.kugou.com/song_search_v2"
             params = {
@@ -465,15 +486,20 @@ class KuGouSource(LRCSource):
             
             response = self._safe_request('GET', search_url, params=params)
             if not response or response.status_code != 200:
+                print(f"✗ KuGou search failed (status: {response.status_code if response else 'None'})")
                 return candidates
             
             data = response.json()
             if not data.get('data') or not data['data'].get('lists'):
+                print(f"✗ No songs found in KuGou results")
                 return candidates
             
             songs = data['data']['lists']
             if not songs:
+                print(f"✗ Empty results list")
                 return candidates
+            
+            print(f"Found {len(songs)} songs in search results")
             
             # Score and sort songs
             scored_songs = []
@@ -505,18 +531,24 @@ class KuGouSource(LRCSource):
             
             scored_songs.sort(key=lambda x: x[0], reverse=True)
             
+            print(f"Top scores: {[score for score, _ in scored_songs[:5]]}")
+            
             # Try top 10 best matches
             for score, song in scored_songs[:10]:
                 if score < 5:
+                    print(f"Skipping song with score < 5: {score}")
                     continue
                 
                 try:
                     file_hash = song.get('FileHash') or song.get('Hash')
                     if not file_hash:
+                        print(f"No hash found for song")
                         continue
                     
                     song_name = song.get('SongName', '')
                     song_artist = song.get('SingerName', '')
+                    
+                    print(f"Trying: {song_artist} - {song_name} (score: {score})")
                     
                     # Get lyrics
                     lyric_url = "https://www.kugou.com/yy/index.php"
@@ -531,6 +563,7 @@ class KuGouSource(LRCSource):
                         if lyric_data.get('data') and lyric_data['data'].get('lyrics'):
                             content = lyric_data['data']['lyrics']
                             if content.strip().startswith('['):
+                                print(f"  ✓ Found lyrics")
                                 # Extract preview
                                 lines = content.split('\n')
                                 preview_lines = [line for line in lines[:5] if line.strip().startswith('[')]
@@ -544,11 +577,18 @@ class KuGouSource(LRCSource):
                                     'full_lyrics': content,
                                     'score': score
                                 })
-                except Exception:
+                            else:
+                                print(f"  ✗ Not in LRC format")
+                        else:
+                            print(f"  ✗ No lyrics available")
+                    else:
+                        print(f"  ✗ Lyrics request failed (status: {lyric_response.status_code if lyric_response else 'None'})")
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
                     continue
         
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"KuGou error: {e}")
         
         return candidates
 
@@ -708,6 +748,9 @@ class TencentQQSource(LRCSource):
             artist_norm = self._normalize_search_term(artist)
             title_norm = self._normalize_search_term(title)
             
+            print(f"\n=== QQ Music API (Candidates) ===")
+            print(f"Searching for: {artist_norm} {title_norm}")
+            
             # Using the JSON format endpoint
             search_url = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
             
@@ -724,16 +767,21 @@ class TencentQQSource(LRCSource):
             
             response = self._safe_request('GET', search_url, params=params)
             if not response or response.status_code != 200:
+                print(f"✗ QQ Music search failed (status: {response.status_code if response else 'None'})")
                 return candidates
             
             data = response.json()
             
             if not data.get('data', {}).get('song', {}).get('list'):
+                print(f"✗ No songs found in QQ Music results")
                 return candidates
             
             songs = data['data']['song']['list']
             if not songs:
+                print(f"✗ Empty results list")
                 return candidates
+            
+            print(f"Found {len(songs)} songs in search results")
             
             # Score and sort songs
             scored_songs = []
@@ -770,13 +818,17 @@ class TencentQQSource(LRCSource):
             
             scored_songs.sort(key=lambda x: x[0], reverse=True)
             
+            print(f"Top scores: {[score for score, _ in scored_songs[:5]]}")
+            
             # Try top 10 best matches
             for score, song in scored_songs[:10]:
                 if score < 5:
+                    print(f"Skipping song with score < 5: {score}")
                     continue
                 
                 song_mid = song.get('songmid')
                 if not song_mid:
+                    print(f"No songmid found for song")
                     continue
                 
                 try:
@@ -786,6 +838,8 @@ class TencentQQSource(LRCSource):
                         artist_str = ', '.join([s.get('name', '') for s in song_artists])
                     else:
                         artist_str = str(song_artists)
+                    
+                    print(f"Trying: {artist_str} - {song_name} (score: {score})")
                     
                     # Get lyrics
                     lyric_url = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
@@ -802,6 +856,7 @@ class TencentQQSource(LRCSource):
                             try:
                                 decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
                                 if decoded.strip():
+                                    print(f"  ✓ Found lyrics")
                                     lines = decoded.split('\n')
                                     preview_lines = [line for line in lines[:5] if line.strip().startswith('[')]
                                     preview = '\n'.join(preview_lines[:3])
@@ -814,7 +869,10 @@ class TencentQQSource(LRCSource):
                                         'full_lyrics': decoded,
                                         'score': score
                                     })
-                            except:
+                                else:
+                                    print(f"  ✗ Decoded lyrics empty")
+                            except Exception as e:
+                                print(f"  ✗ Failed to decode base64: {e}")
                                 if lyric_data.get('lyric').strip():
                                     lines = lyric_data.get('lyric').split('\n')
                                     preview_lines = [line for line in lines[:5] if line.strip().startswith('[')]
@@ -828,11 +886,16 @@ class TencentQQSource(LRCSource):
                                         'full_lyrics': lyric_data.get('lyric'),
                                         'score': score
                                     })
-                except Exception:
+                        else:
+                            print(f"  ✗ No lyrics available")
+                    else:
+                        print(f"  ✗ Lyrics request failed (status: {lyric_response.status_code if lyric_response else 'None'})")
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
                     continue
         
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"QQ Music error: {e}")
         
         return candidates
 
