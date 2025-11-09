@@ -5,8 +5,11 @@ Automatic LRC file downloader based on music metadata
 """
 
 import sys
+import urllib3
 from PyQt6.QtWidgets import QApplication
 from gui.main_window import MainWindow
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def main():
     app = QApplication(sys.argv)

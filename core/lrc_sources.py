@@ -17,6 +17,7 @@ class LRCSource:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         })
+        self.session.verify = False
         self.timeout = 10
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
@@ -82,7 +83,7 @@ class KuGouSource(LRCSource):
                 'hash': ''
             }
             
-            response = self.session.get(search_url, params=params, timeout=self.timeout)
+            response = self.session.get(search_url, params=params, timeout=self.timeout, verify=False)
             if response.status_code != 200:
                 return None
             
@@ -111,7 +112,7 @@ class KuGouSource(LRCSource):
                 'charset': 'utf8'
             }
             
-            lyric_response = self.session.get(lyric_url, params=lyric_params, timeout=self.timeout)
+            lyric_response = self.session.get(lyric_url, params=lyric_params, timeout=self.timeout, verify=False)
             if lyric_response.status_code == 200:
                 content = lyric_response.text
                 # Check if it's valid LRC format
@@ -148,8 +149,8 @@ class TencentQQSource(LRCSource):
             
             # Parse response
             text = response.text
-            # QQ music returns a callback format, extract JSON
-            match = re.search(r'callback\((.*?)\)', text)
+            # QQ music returns a callback format, use greedy regex to get full JSON
+            match = re.search(r'callback\((.*)\)\s*;?\s*$', text, re.DOTALL)
             if not match:
                 return None
             
@@ -163,16 +164,20 @@ class TencentQQSource(LRCSource):
             if not songs:
                 return None
             
-            song = songs[0]
-            mid = song.get('mid')
+            # Find first song with songmid
+            song_mid = None
+            for song in songs:
+                song_mid = song.get('songmid')
+                if song_mid:
+                    break
             
-            if not mid:
+            if not song_mid:
                 return None
             
             # Get lyrics
             lyric_url = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
             lyric_params = {
-                'songmid': mid,
+                'songmid': song_mid,
                 'g_tk': 5381,
                 'format': 'json'
             }
@@ -180,18 +185,23 @@ class TencentQQSource(LRCSource):
             lyric_response = self.session.get(lyric_url, params=lyric_params, timeout=self.timeout)
             if lyric_response.status_code == 200:
                 text = lyric_response.text
-                # Handle callback format
-                match = re.search(r'MusicJsonCallback\((.*?)\)', text)
-                if match:
-                    lyric_data = json.loads(match.group(1))
-                    if lyric_data.get('lyric'):
-                        # Decode base64 if needed
-                        import base64
-                        try:
-                            decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
-                            return decoded
-                        except:
-                            return lyric_data.get('lyric')
+                # Handle callback format - use greedy regex for full JSON
+                if 'MusicJsonCallback(' in text:
+                    try:
+                        match = re.search(r'MusicJsonCallback\((.*)\)\s*;?\s*$', text, re.DOTALL)
+                        if match:
+                            json_str = match.group(1)
+                            lyric_data = json.loads(json_str)
+                            if lyric_data.get('lyric'):
+                                # Decode base64 if needed
+                                import base64
+                                try:
+                                    decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
+                                    return decoded
+                                except:
+                                    return lyric_data.get('lyric')
+                    except (json.JSONDecodeError, ValueError):
+                        pass
         
         except Exception as e:
             print(f"Tencent QQ error: {e}")
