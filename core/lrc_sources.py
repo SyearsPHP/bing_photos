@@ -16,13 +16,14 @@ class LRCSource:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate'
         })
         # Enable SSL verification but will fallback to disabled if needed
         self.session.verify = True
-        self.timeout = 10
+        self.timeout = 15
     
     @staticmethod
     def _normalize_search_term(text: str) -> str:
@@ -42,19 +43,31 @@ class LRCSource:
             return text
     
     def _safe_request(self, method: str, url: str, **kwargs) -> Optional[requests.Response]:
-        """Make a request with SSL fallback"""
-        try:
-            return self.session.request(method, url, timeout=self.timeout, **kwargs)
-        except requests.exceptions.SSLError:
-            # Fallback to disabled SSL verification if SSL fails
-            old_verify = self.session.verify
-            self.session.verify = False
+        """Make a request with SSL fallback and retry logic"""
+        max_retries = 2
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
             try:
                 return self.session.request(method, url, timeout=self.timeout, **kwargs)
-            finally:
-                self.session.verify = old_verify
-        except Exception:
-            return None
+            except requests.exceptions.SSLError:
+                # Fallback to disabled SSL verification if SSL fails
+                old_verify = self.session.verify
+                self.session.verify = False
+                try:
+                    return self.session.request(method, url, timeout=self.timeout, **kwargs)
+                finally:
+                    self.session.verify = old_verify
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                # Retry on timeout/connection errors
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return None
+            except Exception:
+                return None
+        
+        return None
     
     def get_lyrics(self, artist: str, title: str) -> Optional[str]:
         """Download lyrics for artist and title"""
@@ -75,7 +88,7 @@ class NetEaseSource(LRCSource):
             params = {
                 's': f"{artist_norm} {title_norm}",
                 'type': 1,
-                'limit': 10
+                'limit': 20  # Get more results to find better match
             }
             
             response = self._safe_request('GET', search_url, params=params)
@@ -86,18 +99,66 @@ class NetEaseSource(LRCSource):
             if not data.get('result', {}).get('songs'):
                 return None
             
-            # Get first matching song
-            song = data['result']['songs'][0]
-            song_id = song['id']
+            # Try to find the best matching song
+            songs = data['result']['songs']
+            best_song = None
+            best_score = -1
             
-            # Get lyrics
-            lyric_url = f"https://music.163.com/api/song/lyric?id={song_id}&lv=1"
-            lyric_response = self._safe_request('GET', lyric_url)
+            for song in songs:
+                # Check if artist and title match
+                song_name = song.get('name', '').lower()
+                song_artists = song.get('artists', [])
+                song_artist_names = ' '.join([a.get('name', '').lower() for a in song_artists])
+                
+                # Combine song name and artist for better matching
+                song_full_text = f"{song_name} {song_artist_names}".lower()
+                artist_norm_lower = artist_norm.lower()
+                title_norm_lower = title_norm.lower()
+                
+                # Calculate match score
+                score = 0
+                
+                # Title match
+                if title_norm_lower in song_name or song_name in title_norm_lower:
+                    score += 10
+                elif title_norm_lower in song_full_text:
+                    score += 5
+                
+                # Artist match
+                if artist_norm_lower in song_artist_names:
+                    score += 10
+                elif artist_norm_lower in song_full_text:
+                    score += 5
+                
+                # Prefer exact artist matches and original versions
+                if song_artist_names and artist_norm_lower in song_artist_names:
+                    score += 5
+                if '原唱' in song_name or '原版' in song_name:
+                    score += 3
+                
+                if score > best_score:
+                    best_score = score
+                    best_song = song
             
-            if lyric_response and lyric_response.status_code == 200:
-                lyric_data = lyric_response.json()
-                if lyric_data.get('lrc', {}).get('lyric'):
-                    return lyric_data['lrc']['lyric']
+            # If no match found, use first result as fallback
+            if best_song is None:
+                best_song = songs[0]
+            
+            song_id = best_song['id']
+            
+            # Get lyrics - try multiple times with different songs if needed
+            for attempt_song in songs[:5]:  # Try top 5 matches
+                try:
+                    lyric_url = f"https://music.163.com/api/song/lyric?id={attempt_song['id']}&lv=1"
+                    lyric_response = self._safe_request('GET', lyric_url)
+                    
+                    if lyric_response and lyric_response.status_code == 200:
+                        lyric_data = lyric_response.json()
+                        lyric_content = lyric_data.get('lrc', {}).get('lyric', '')
+                        if lyric_content and lyric_content.strip():
+                            return lyric_content
+                except:
+                    continue
         
         except Exception as e:
             print(f"NetEase error: {e}")
