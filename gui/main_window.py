@@ -8,9 +8,10 @@ from typing import List, Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
-    QMessageBox, QCheckBox, QSpinBox, QTabWidget, QGroupBox, QHeaderView
+    QMessageBox, QCheckBox, QSpinBox, QTabWidget, QGroupBox, QHeaderView,
+    QDialog, QTextEdit, QComboBox, QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEventLoop, QTimer
 from PyQt6.QtGui import QIcon
 from core.music_processor import MusicProcessor
 from core.lyrics_downloader import LyricsDownloader
@@ -18,15 +19,96 @@ from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.wave import WAVE
 
+class LyricsSelectionDialog(QDialog):
+    """Dialog for user to preview and select lyrics from multiple sources"""
+    
+    def __init__(self, filename: str, candidates: List[dict], parent=None):
+        super().__init__(parent)
+        self.filename = filename
+        self.candidates = candidates
+        self.selected_lyrics = None
+        self.init_ui()
+    
+    def init_ui(self) -> None:
+        self.setWindowTitle(f"Select Lyrics - {self.filename}")
+        self.setGeometry(100, 100, 800, 600)
+        
+        layout = QVBoxLayout(self)
+        
+        # Title
+        title_label = QLabel(f"Found {len(self.candidates)} lyrics source(s). Please select one:")
+        layout.addWidget(title_label)
+        
+        # Candidates list
+        self.candidates_list = QListWidget()
+        for i, candidate in enumerate(self.candidates):
+            source = candidate.get('source', 'Unknown')
+            artist = candidate.get('artist', 'Unknown')
+            title = candidate.get('title', 'Unknown')
+            score = candidate.get('score', 0)
+            item_text = f"[{source}] {artist} - {title} (score: {score})"
+            item = QListWidgetItem(item_text)
+            item.setData(1001, i)  # Store index
+            self.candidates_list.addItem(item)
+        
+        self.candidates_list.itemSelectionChanged.connect(self.on_selection_changed)
+        layout.addWidget(self.candidates_list)
+        
+        # Preview label
+        preview_label = QLabel("Lyrics Preview:")
+        layout.addWidget(preview_label)
+        
+        # Preview text
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setMaximumHeight(200)
+        layout.addWidget(self.preview_text)
+        
+        # Select first item by default
+        if self.candidates_list.count() > 0:
+            self.candidates_list.setCurrentRow(0)
+            self.on_selection_changed()
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.ok_btn = QPushButton("Download Selected")
+        self.ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(self.ok_btn)
+        
+        self.skip_btn = QPushButton("Skip This File")
+        self.skip_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.skip_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def on_selection_changed(self) -> None:
+        """Update preview when selection changes"""
+        current_row = self.candidates_list.currentRow()
+        if current_row >= 0:
+            candidate = self.candidates[current_row]
+            preview = candidate.get('preview', '')
+            self.preview_text.setPlainText(preview)
+            self.selected_lyrics = candidate.get('full_lyrics', '')
+    
+    def get_selected_lyrics(self) -> Optional[str]:
+        """Get the full lyrics of the selected candidate"""
+        return self.selected_lyrics
+
 class WorkerThread(QThread):
     progress_update = pyqtSignal(int, str)
+    request_user_selection = pyqtSignal(str, list)  # filename, candidates
     finished = pyqtSignal(list, list)
     
-    def __init__(self, music_files: List[str], skip_existing: bool):
+    def __init__(self, music_files: List[str], skip_existing: bool, parent_window=None):
         super().__init__()
         self.music_files = music_files
         self.skip_existing = skip_existing
         self.downloader = LyricsDownloader()
+        self.parent_window = parent_window
+        self.user_selected_lyrics = None
+        self.user_action = None  # None means waiting for response
+        self.event_loop = QEventLoop()
         
     def run(self) -> None:
         successful: List[str] = []
@@ -47,16 +129,49 @@ class WorkerThread(QThread):
                     successful.append(os.path.basename(music_file))
                     continue
                 
-                if self.downloader.download_lyrics(metadata, lrc_path):
-                    successful.append(os.path.basename(music_file))
+                # Get all lyrics candidates from all sources
+                candidates = self.downloader.get_all_lyrics_candidates(metadata)
+                
+                if candidates:
+                    # Request user selection
+                    self.user_selected_lyrics = None
+                    self.user_action = None
+                    
+                    # Emit signal to show dialog
+                    self.request_user_selection.emit(os.path.basename(music_file), candidates)
+                    
+                    # Wait for user response
+                    while self.user_action is None:
+                        self.msleep(100)
+                    
+                    # Save the selected lyrics if user chose one
+                    if self.user_selected_lyrics:
+                        try:
+                            with open(lrc_path, 'w', encoding='utf-8') as f:
+                                f.write(self.user_selected_lyrics)
+                            successful.append(os.path.basename(music_file))
+                        except Exception as e:
+                            print(f"Error saving lyrics for {music_file}: {e}")
+                            failed.append(os.path.basename(music_file))
+                    else:
+                        failed.append(os.path.basename(music_file))
                 else:
-                    failed.append(os.path.basename(music_file))
+                    # Fall back to original method
+                    if self.downloader.download_lyrics(metadata, lrc_path):
+                        successful.append(os.path.basename(music_file))
+                    else:
+                        failed.append(os.path.basename(music_file))
                     
             except Exception as e:
                 print(f"Error processing {music_file}: {e}")
                 failed.append(os.path.basename(music_file))
         
         self.finished.emit(successful, failed)
+    
+    def set_user_selection(self, lyrics: Optional[str]):
+        """Called by main window when user selects lyrics"""
+        self.user_selected_lyrics = lyrics
+        self.user_action = 'done'  # Signal that we're done waiting
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -213,14 +328,24 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setMaximum(len(self.music_files))
         
-        self.worker_thread = WorkerThread(self.music_files, self.skip_existing_cb.isChecked())
+        self.worker_thread = WorkerThread(self.music_files, self.skip_existing_cb.isChecked(), self)
         self.worker_thread.progress_update.connect(self.update_progress)
+        self.worker_thread.request_user_selection.connect(self.on_user_selection_needed)
         self.worker_thread.finished.connect(self.on_download_finished)
         self.worker_thread.start()
         
     def update_progress(self, current: int, message: str) -> None:
         self.progress_bar.setValue(current)
         self.status_label.setText(message)
+    
+    def on_user_selection_needed(self, filename: str, candidates: List[dict]) -> None:
+        """Show dialog for user to select lyrics"""
+        dialog = LyricsSelectionDialog(filename, candidates, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_lyrics = dialog.get_selected_lyrics()
+            self.worker_thread.set_user_selection(selected_lyrics)
+        else:
+            self.worker_thread.set_user_selection(None)
         
     def on_download_finished(self, successful: List[str], failed: List[str]) -> None:
         self.progress_bar.setVisible(False)
