@@ -131,16 +131,36 @@ The downloader tries multiple music streaming APIs in order:
 
 ## Troubleshooting
 
+### Enhanced Logging and Debugging
+
+The application now provides **detailed logging** to help you understand the lyrics download process:
+- Shows which API source is being used (NetEase, KuGou, QQ Music)
+- Displays original metadata vs normalized search terms
+- Lists all search results with match scores
+- Shows API endpoints and parameters
+- Indicates success/failure for each step
+
+For detailed troubleshooting guide, see **[LOGGING_AND_TROUBLESHOOTING.md](LOGGING_AND_TROUBLESHOOTING.md)**
+
 ### LRC files not downloading
 - Ensure your music files have proper metadata (artist and title)
 - Check internet connection
-- Some songs may not be available in any of the supported services
+- Some songs may not be available in any of the supported services (copyright restrictions)
+- **Check the console output** to see which songs were found and why they were chosen/rejected
 - Use the Metadata Review tab to check for metadata issues
 
-### Wrong lyrics downloaded
-- Verify that artist and title metadata are correct
-- Consider removing the incorrect LRC file and trying again
-- Use Metadata Review to identify encoding or character issues
+### Wrong lyrics downloaded (e.g., cover versions)
+**Example:** File has "周杰伦 - 青花瓷" but downloads "沈幼楚 - 青花瓷周杰伦"
+
+**Reason:** The original song may not be available due to copyright restrictions. The scoring system will select the best available match.
+
+**What to check:**
+1. Look at the console output showing "Found X songs, top 10 scores"
+2. If the original artist is not in the search results, it's a data availability issue (not a bug)
+3. The program will automatically try other sources (KuGou, QQ Music)
+4. Some popular artists (周杰伦, 林俊杰, etc.) have strict copyright protection
+
+**Solution:** Check the detailed logs to understand which songs were available and why certain choices were made.
 
 ### Metadata Issues
 If songs fail to download despite having metadata, use the Metadata Review tab to check for:
@@ -150,6 +170,12 @@ If songs fail to download despite having metadata, use the Metadata Review tab t
 - **Encoding problems** with non-UTF8 characters
 - **Extra whitespace** in metadata fields
 
+### macOS Mach Port Error
+If you see: `error messaging the mach port for IMKCFRunLoopWakeUpReliable`
+- **This is harmless** and does not affect functionality
+- It's a known PyQt6 + macOS Input Method Kit interaction issue
+- The error is now suppressed in the latest version
+
 ### Application won't start
 - Ensure all dependencies are installed: `pip install -r requirements.txt`
 - Verify Python 3.7+ is installed: `python3 --version`
@@ -157,20 +183,23 @@ If songs fail to download despite having metadata, use the Metadata Review tab t
 ## Project Structure
 
 ```
-├── main.py                 # Application entry point
-├── requirements.txt        # Python dependencies
-├── setup.py               # Setup configuration
-├── cli_metadata_check.py  # Command-line metadata tool
-├── test_metadata.py       # Test script for metadata functions
-├── METADATA_REVIEW.md     # Detailed metadata review guide
+├── main.py                          # Application entry point
+├── requirements.txt                 # Python dependencies
+├── setup.py                        # Setup configuration
+├── cli_metadata_check.py           # Command-line metadata tool
+├── test_metadata.py                # Test script for metadata functions
+├── test_logging.py                 # Test script for enhanced logging
+├── test_all_sources.py             # Test all API sources individually
+├── METADATA_REVIEW.md              # Detailed metadata review guide
+├── LOGGING_AND_TROUBLESHOOTING.md  # Logging and troubleshooting guide
 ├── gui/
 │   ├── __init__.py
-│   └── main_window.py     # GUI implementation with dual tabs
+│   └── main_window.py              # GUI implementation with dual tabs
 └── core/
     ├── __init__.py
-    ├── music_processor.py  # Audio file processing with cleaning
-    ├── lyrics_downloader.py # Main downloader logic
-    └── lrc_sources.py     # LRC source implementations
+    ├── music_processor.py           # Audio file processing with cleaning
+    ├── lyrics_downloader.py         # Main downloader logic
+    └── lrc_sources.py              # LRC source implementations (enhanced logging)
 ```
 
 ## Performance Notes
