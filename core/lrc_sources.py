@@ -99,10 +99,9 @@ class NetEaseSource(LRCSource):
             if not data.get('result', {}).get('songs'):
                 return None
             
-            # Try to find the best matching song
+            # Score all songs and sort by match quality
             songs = data['result']['songs']
-            best_song = None
-            best_score = -1
+            scored_songs = []
             
             for song in songs:
                 # Check if artist and title match
@@ -118,37 +117,56 @@ class NetEaseSource(LRCSource):
                 # Calculate match score
                 score = 0
                 
-                # Title match
-                if title_norm_lower in song_name or song_name in title_norm_lower:
+                # Exact title match (highest priority)
+                if title_norm_lower == song_name:
+                    score += 20
+                elif title_norm_lower in song_name or song_name in title_norm_lower:
                     score += 10
                 elif title_norm_lower in song_full_text:
                     score += 5
                 
-                # Artist match
-                if artist_norm_lower in song_artist_names:
-                    score += 10
+                # Exact artist match - CRITICAL for correct song
+                if artist_norm_lower == song_artist_names:
+                    score += 30  # Higher weight for exact artist match
+                elif artist_norm_lower in song_artist_names:
+                    score += 15
                 elif artist_norm_lower in song_full_text:
-                    score += 5
+                    score += 8
+                else:
+                    # If artist doesn't match at all, heavily penalize
+                    score -= 10
                 
-                # Prefer exact artist matches and original versions
-                if song_artist_names and artist_norm_lower in song_artist_names:
-                    score += 5
+                # Check if artist mentioned in song name (original singer credits)
                 if '原唱' in song_name or '原版' in song_name:
-                    score += 3
+                    # This is often a cover, reduce score
+                    if artist_norm_lower not in song_artist_names:
+                        score -= 5  # It's a cover version
+                    else:
+                        score += 3  # It's marked as original
                 
-                if score > best_score:
-                    best_score = score
-                    best_song = song
+                # Penalize covers, remixes, live versions, instrumentals
+                penalty_keywords = ['翻唱', '伴奏', '纯音乐', 'cover', 'remix', 'live', 'instrumental', 'karaoke', '卡拉OK', '钢琴版', '吉他版']
+                for keyword in penalty_keywords:
+                    if keyword in song_name:
+                        score -= 8
+                
+                scored_songs.append((score, song))
             
-            # If no match found, use first result as fallback
-            if best_song is None:
-                best_song = songs[0]
+            # Sort by score descending (highest scores first)
+            scored_songs.sort(key=lambda x: x[0], reverse=True)
             
-            song_id = best_song['id']
-            
-            # Get lyrics - try multiple times with different songs if needed
-            for attempt_song in songs[:5]:  # Try top 5 matches
+            # Try songs in order of match quality
+            for score, attempt_song in scored_songs[:8]:  # Try top 8 best matches
+                # Skip songs with very low scores (likely not relevant)
+                if score < 5:
+                    continue
+                    
                 try:
+                    song_name = attempt_song.get('name', '')
+                    song_artists = attempt_song.get('artists', [])
+                    artist_names = ', '.join([a.get('name', '') for a in song_artists])
+                    print(f"Trying: {artist_names} - {song_name} (score: {score})")
+                    
                     lyric_url = f"https://music.163.com/api/song/lyric?id={attempt_song['id']}&lv=1"
                     lyric_response = self._safe_request('GET', lyric_url)
                     
@@ -156,8 +174,12 @@ class NetEaseSource(LRCSource):
                         lyric_data = lyric_response.json()
                         lyric_content = lyric_data.get('lrc', {}).get('lyric', '')
                         if lyric_content and lyric_content.strip():
+                            print(f"✓ Found lyrics for: {artist_names} - {song_name}")
                             return lyric_content
-                except:
+                        else:
+                            print(f"  No lyrics available for this version")
+                except Exception as e:
+                    print(f"  Error getting lyrics: {e}")
                     continue
         
         except Exception as e:
@@ -175,15 +197,12 @@ class KuGouSource(LRCSource):
             artist_norm = self._normalize_search_term(artist)
             title_norm = self._normalize_search_term(title)
             
-            # Try alternative KuGou endpoint
-            search_url = "https://www.kugou.com/yy/index.php"
-            
+            # Search for songs first
+            search_url = "https://songsearch.kugou.com/song_search_v2"
             params = {
-                'r': 'play/getdata',
-                'hash': '',
-                'album_id': '',
-                'mid': '',
-                'keyword': f"{artist_norm} {title_norm}"
+                'keyword': f"{artist_norm} {title_norm}",
+                'page': 1,
+                'pagesize': 20
             }
             
             response = self._safe_request('GET', search_url, params=params)
@@ -191,25 +210,77 @@ class KuGouSource(LRCSource):
                 return None
             
             data = response.json()
-            if not data.get('data') or not data['data'].get('play_url'):
+            if not data.get('data') or not data['data'].get('lists'):
                 return None
             
-            # Try lyrics download endpoint
-            lyric_url = "https://www.kugou.com/yy/index.php"
-            lyric_params = {
-                'r': 'lyric/get',
-                'hash': data['data'].get('hash', ''),
-                'album_id': data['data'].get('album_id', '')
-            }
+            songs = data['data']['lists']
+            if not songs:
+                return None
             
-            lyric_response = self._safe_request('GET', lyric_url, params=lyric_params)
-            if lyric_response and lyric_response.status_code == 200:
-                lyric_data = lyric_response.json()
-                if lyric_data.get('data') and lyric_data['data'].get('content'):
-                    content = lyric_data['data']['content']
-                    # Check if it's valid LRC format
-                    if content.strip().startswith('['):
-                        return content
+            # Score and sort songs
+            scored_songs = []
+            artist_norm_lower = artist_norm.lower()
+            title_norm_lower = title_norm.lower()
+            
+            for song in songs:
+                song_name = song.get('SongName', '').lower()
+                song_artist = song.get('SingerName', '').lower()
+                
+                score = 0
+                
+                # Exact matches
+                if title_norm_lower == song_name:
+                    score += 20
+                elif title_norm_lower in song_name or song_name in title_norm_lower:
+                    score += 10
+                
+                if artist_norm_lower == song_artist:
+                    score += 20
+                elif artist_norm_lower in song_artist or song_artist in artist_norm_lower:
+                    score += 10
+                
+                # Penalize unwanted versions
+                penalty_keywords = ['伴奏', '纯音乐', 'cover', 'remix', 'live', 'instrumental']
+                for keyword in penalty_keywords:
+                    if keyword in song_name:
+                        score -= 5
+                
+                scored_songs.append((score, song))
+            
+            scored_songs.sort(key=lambda x: x[0], reverse=True)
+            
+            # Try top matches
+            for score, song in scored_songs[:5]:
+                if score < 5:
+                    continue
+                
+                try:
+                    file_hash = song.get('FileHash') or song.get('Hash')
+                    if not file_hash:
+                        continue
+                    
+                    song_name = song.get('SongName', '')
+                    song_artist = song.get('SingerName', '')
+                    print(f"Trying KuGou: {song_artist} - {song_name} (score: {score})")
+                    
+                    # Get lyrics using hash
+                    lyric_url = "https://www.kugou.com/yy/index.php"
+                    lyric_params = {
+                        'r': 'play/getdata',
+                        'hash': file_hash
+                    }
+                    
+                    lyric_response = self._safe_request('GET', lyric_url, params=lyric_params)
+                    if lyric_response and lyric_response.status_code == 200:
+                        lyric_data = lyric_response.json()
+                        if lyric_data.get('data') and lyric_data['data'].get('lyrics'):
+                            content = lyric_data['data']['lyrics']
+                            if content.strip().startswith('['):
+                                print(f"✓ Found KuGou lyrics for: {song_artist} - {song_name}")
+                                return content
+                except Exception as e:
+                    print(f"  KuGou error for song: {e}")
+                    continue
         
         except Exception as e:
             print(f"KuGou error: {e}")
@@ -234,20 +305,18 @@ class TencentQQSource(LRCSource):
                 'cr': 1,
                 'flag_qc': 0,
                 'p': 1,
-                'n': 10,
+                'n': 20,
                 'w': f"{artist_norm} {title_norm}",
                 'g_tk': 5381,
-                'format': 'json'  # Request JSON format directly
+                'format': 'json'
             }
             
             response = self._safe_request('GET', search_url, params=params)
             if not response or response.status_code != 200:
                 return None
             
-            # Parse JSON response directly
             data = response.json()
             
-            # Look for songs in the response
             if not data.get('data', {}).get('song', {}).get('list'):
                 return None
             
@@ -255,35 +324,88 @@ class TencentQQSource(LRCSource):
             if not songs:
                 return None
             
-            # Find first song with songmid
-            song_mid = None
+            # Score and sort songs
+            scored_songs = []
+            artist_norm_lower = artist_norm.lower()
+            title_norm_lower = title_norm.lower()
+            
             for song in songs:
+                song_name = song.get('songname', '').lower()
+                song_artists = song.get('singer', [])
+                
+                # Build artist string
+                if isinstance(song_artists, list):
+                    song_artist = ' '.join([s.get('name', '').lower() for s in song_artists])
+                else:
+                    song_artist = str(song_artists).lower()
+                
+                score = 0
+                
+                # Exact matches
+                if title_norm_lower == song_name:
+                    score += 20
+                elif title_norm_lower in song_name or song_name in title_norm_lower:
+                    score += 10
+                
+                if artist_norm_lower == song_artist:
+                    score += 20
+                elif artist_norm_lower in song_artist or song_artist in artist_norm_lower:
+                    score += 10
+                
+                # Penalize unwanted versions
+                penalty_keywords = ['伴奏', '纯音乐', 'cover', 'remix', 'live', 'instrumental']
+                for keyword in penalty_keywords:
+                    if keyword in song_name:
+                        score -= 5
+                
+                scored_songs.append((score, song))
+            
+            scored_songs.sort(key=lambda x: x[0], reverse=True)
+            
+            # Try top matches
+            for score, song in scored_songs[:5]:
+                if score < 5:
+                    continue
+                
                 song_mid = song.get('songmid')
-                if song_mid:
-                    break
-            
-            if not song_mid:
-                return None
-            
-            # Get lyrics
-            lyric_url = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
-            lyric_params = {
-                'songmid': song_mid,
-                'g_tk': 5381,
-                'format': 'json'
-            }
-            
-            lyric_response = self._safe_request('GET', lyric_url, params=lyric_params)
-            if lyric_response and lyric_response.status_code == 200:
-                lyric_data = lyric_response.json()
-                if lyric_data.get('lyric'):
-                    # Decode base64 if needed
-                    import base64
-                    try:
-                        decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
-                        return decoded
-                    except:
-                        return lyric_data.get('lyric')
+                if not song_mid:
+                    continue
+                
+                try:
+                    song_name = song.get('songname', '')
+                    song_artists = song.get('singer', [])
+                    if isinstance(song_artists, list):
+                        artist_str = ', '.join([s.get('name', '') for s in song_artists])
+                    else:
+                        artist_str = str(song_artists)
+                    
+                    print(f"Trying QQ Music: {artist_str} - {song_name} (score: {score})")
+                    
+                    # Get lyrics
+                    lyric_url = f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
+                    lyric_params = {
+                        'songmid': song_mid,
+                        'g_tk': 5381,
+                        'format': 'json'
+                    }
+                    
+                    lyric_response = self._safe_request('GET', lyric_url, params=lyric_params)
+                    if lyric_response and lyric_response.status_code == 200:
+                        lyric_data = lyric_response.json()
+                        if lyric_data.get('lyric'):
+                            import base64
+                            try:
+                                decoded = base64.b64decode(lyric_data['lyric']).decode('utf-8')
+                                if decoded.strip():
+                                    print(f"✓ Found QQ Music lyrics for: {artist_str} - {song_name}")
+                                    return decoded
+                            except:
+                                if lyric_data.get('lyric').strip():
+                                    print(f"✓ Found QQ Music lyrics for: {artist_str} - {song_name}")
+                                    return lyric_data.get('lyric')
+                except Exception as e:
+                    print(f"  QQ Music error for song: {e}")
+                    continue
         
         except Exception as e:
             print(f"Tencent QQ error: {e}")
