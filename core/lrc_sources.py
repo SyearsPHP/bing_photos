@@ -952,9 +952,10 @@ class LyricistSource(LRCSource):
 
 
 # List of all available sources in order of preference
+# Priority: QQ Music > KuGou > NetEase
 ALL_SOURCES = [
-    NetEaseSource,
-    KuGouSource,
     TencentQQSource,
+    KuGouSource,
+    NetEaseSource,
     # GeniusSource,  # Uncomment for English songs
 ]
