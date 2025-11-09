@@ -11,6 +11,8 @@ A powerful batch LRC lyrics downloader for macOS with a user-friendly GUI. Autom
 - **Smart Matching**: Uses music metadata (artist, title) to find matching lyrics
 - **Error Handling**: Shows detailed results with success/failure statistics
 - **Duplicate Prevention**: Option to skip files that already have LRC files
+- **Metadata Review**: Analyze music file metadata to identify potential issues
+- **Problem Detection**: Detects null characters, encoding issues, and missing tags
 
 ## Installation
 
@@ -46,13 +48,39 @@ Run the application:
 python3 main.py
 ```
 
-Steps:
+The application now has two tabs:
+
+#### Batch Download Tab
 1. Click "Select Folder" to choose a directory containing your music files
 2. Review the found music files and their metadata
 3. (Optional) Check "Skip Existing LRC" to avoid overwriting existing lyrics
 4. Click "Start Download" to begin batch processing
 5. Monitor progress in the progress bar
 6. Review results in the summary
+
+#### Metadata Review Tab (New)
+1. Click "选择音乐文件" to select specific music files for analysis
+2. Click "分析元数据" to analyze the selected files
+3. Review the detailed analysis in the table:
+   - **文件名**: Music file name
+   - **格式**: MP3/WAV/FLAC
+   - **艺术家**: Extracted artist name
+   - **歌曲名**: Extracted song title
+   - **问题**: Detected issues (shows "正常" if no problems)
+   - **原始数据**: Raw metadata for debugging
+4. Check the summary for statistics on normal vs problematic files
+
+### Command Line Tools
+
+#### Metadata Check Tool
+```bash
+python cli_metadata_check.py song1.mp3 song2.flac
+```
+
+#### Test Script
+```bash
+python test_metadata.py
+```
 
 ### Command Line (Future)
 
@@ -107,10 +135,20 @@ The downloader tries multiple music streaming APIs in order:
 - Ensure your music files have proper metadata (artist and title)
 - Check internet connection
 - Some songs may not be available in any of the supported services
+- Use the Metadata Review tab to check for metadata issues
 
 ### Wrong lyrics downloaded
 - Verify that artist and title metadata are correct
 - Consider removing the incorrect LRC file and trying again
+- Use Metadata Review to identify encoding or character issues
+
+### Metadata Issues
+If songs fail to download despite having metadata, use the Metadata Review tab to check for:
+- **Null characters** (\x00) in artist/title fields
+- **Byte-type data** that needs proper decoding
+- **Missing or empty tags**
+- **Encoding problems** with non-UTF8 characters
+- **Extra whitespace** in metadata fields
 
 ### Application won't start
 - Ensure all dependencies are installed: `pip install -r requirements.txt`
@@ -122,12 +160,15 @@ The downloader tries multiple music streaming APIs in order:
 ├── main.py                 # Application entry point
 ├── requirements.txt        # Python dependencies
 ├── setup.py               # Setup configuration
+├── cli_metadata_check.py  # Command-line metadata tool
+├── test_metadata.py       # Test script for metadata functions
+├── METADATA_REVIEW.md     # Detailed metadata review guide
 ├── gui/
 │   ├── __init__.py
-│   └── main_window.py     # GUI implementation
+│   └── main_window.py     # GUI implementation with dual tabs
 └── core/
     ├── __init__.py
-    ├── music_processor.py  # Audio file processing
+    ├── music_processor.py  # Audio file processing with cleaning
     ├── lyrics_downloader.py # Main downloader logic
     └── lrc_sources.py     # LRC source implementations
 ```
