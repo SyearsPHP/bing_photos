@@ -9,10 +9,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QFileDialog, QTableWidget, QTableWidgetItem, QLabel, QProgressBar,
     QMessageBox, QCheckBox, QSpinBox, QTabWidget, QGroupBox, QHeaderView,
-    QDialog, QTextEdit, QComboBox, QListWidget, QListWidgetItem
+    QDialog, QTextEdit, QComboBox, QListWidget, QListWidgetItem, QSplitter,
+    QScrollArea, QMenu
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEventLoop, QTimer
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEventLoop, QTimer, QSize
+from PyQt6.QtGui import QIcon, QPixmap
 from core.music_processor import MusicProcessor
 from core.lyrics_downloader import LyricsDownloader
 from mutagen.mp3 import MP3
@@ -31,7 +32,7 @@ class LyricsSelectionDialog(QDialog):
     
     def init_ui(self) -> None:
         self.setWindowTitle(f"Select Lyrics - {self.filename}")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 1000, 700)
         
         layout = QVBoxLayout(self)
         
@@ -39,7 +40,14 @@ class LyricsSelectionDialog(QDialog):
         title_label = QLabel(f"Found {len(self.candidates)} lyrics source(s). Please select one:")
         layout.addWidget(title_label)
         
-        # Candidates list
+        # Main splitter with candidates list on left and preview on right
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left panel - candidates list
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.candidates_list = QListWidget()
         for i, candidate in enumerate(self.candidates):
             source = candidate.get('source', 'Unknown')
@@ -52,17 +60,30 @@ class LyricsSelectionDialog(QDialog):
             self.candidates_list.addItem(item)
         
         self.candidates_list.itemSelectionChanged.connect(self.on_selection_changed)
-        layout.addWidget(self.candidates_list)
+        left_layout.addWidget(self.candidates_list)
+        splitter.addWidget(left_widget)
         
-        # Preview label
-        preview_label = QLabel("Lyrics Preview:")
-        layout.addWidget(preview_label)
+        # Right panel - preview with eye icon
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Preview text
+        # Preview header with eye icon
+        preview_header = QHBoxLayout()
+        preview_label = QLabel("👁️ Full Lyrics Preview:")
+        preview_header.addWidget(preview_label)
+        preview_header.addStretch()
+        right_layout.addLayout(preview_header)
+        
+        # Preview text - show full lyrics
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
-        self.preview_text.setMaximumHeight(200)
-        layout.addWidget(self.preview_text)
+        right_layout.addWidget(self.preview_text)
+        splitter.addWidget(right_widget)
+        
+        # Set initial sizes (50-50 split)
+        splitter.setSizes([400, 600])
+        layout.addWidget(splitter)
         
         # Select first item by default
         if self.candidates_list.count() > 0:
@@ -87,9 +108,10 @@ class LyricsSelectionDialog(QDialog):
         current_row = self.candidates_list.currentRow()
         if current_row >= 0:
             candidate = self.candidates[current_row]
-            preview = candidate.get('preview', '')
-            self.preview_text.setPlainText(preview)
-            self.selected_lyrics = candidate.get('full_lyrics', '')
+            # Show full lyrics in preview
+            full_lyrics = candidate.get('full_lyrics', '')
+            self.preview_text.setPlainText(full_lyrics)
+            self.selected_lyrics = full_lyrics
     
     def get_selected_lyrics(self) -> Optional[str]:
         """Get the full lyrics of the selected candidate"""
@@ -317,6 +339,10 @@ class MainWindow(QMainWindow):
             self.results_table.setItem(idx, 0, filename_item)
             self.results_table.setItem(idx, 1, status_item)
             self.results_table.setItem(idx, 2, info_item)
+        
+        # Enable right-click context menu
+        self.results_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.results_table.customContextMenuRequested.connect(self.on_table_right_click)
             
     def start_download(self) -> None:
         if not self.music_files:
@@ -337,6 +363,25 @@ class MainWindow(QMainWindow):
     def update_progress(self, current: int, message: str) -> None:
         self.progress_bar.setValue(current)
         self.status_label.setText(message)
+    
+    def on_table_right_click(self, position) -> None:
+        """Handle right-click on table to delete row"""
+        item = self.results_table.itemAt(position)
+        if item is None:
+            return
+        
+        row = item.row()
+        context_menu = QMenu(self)
+        delete_action = context_menu.addAction("Delete")
+        action = context_menu.exec(self.results_table.mapToGlobal(position))
+        
+        if action == delete_action:
+            # Remove from music_files list and table
+            if row < len(self.music_files):
+                del self.music_files[row]
+                self.results_table.removeRow(row)
+                self.status_label.setText(f"Found {len(self.music_files)} music files")
+                self.start_btn.setEnabled(len(self.music_files) > 0)
     
     def on_user_selection_needed(self, filename: str, candidates: List[dict]) -> None:
         """Show dialog for user to select lyrics"""
